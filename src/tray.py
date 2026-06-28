@@ -1,46 +1,18 @@
 """
-tray.py — System tray icon via Gio.DBusConnection (pure GLib, zero extra deps)
-===============================================================================
-Publishes org.kde.StatusNotifierItem on the session bus using Gio.DBusConnection
-(built into GLib). No dbus-python needed. The GNOME AppIndicator extension
-renders the icon. Supports left-click activation and right-click context menu."""
+tray.py — System tray icon via Gio.DBusConnection (pure GLib, zero extra deps).
+Publishes org.kde.StatusNotifierItem on the session bus using
+Gio.DBusConnection (built into GLib). Uses edit-copy-symbolic
+from the system icon theme — no need to bundle or load pixel data.
+"""
 import os
 import gi
 gi.require_version('Gio', '2.0')
-gi.require_version('GdkPixbuf', '2.0')
-from gi.repository import Gio, GLib, GdkPixbuf
+from gi.repository import Gio, GLib
 
 _BUS_NAME = f'org.kde.StatusNotifierItem-{os.getpid()}-1'
 _OBJ_PATH = '/StatusNotifierItem'
 _MENU_PATH = '/MenuBar'
-_ICON_NAME = 'io.github.juandlr.sclipboard'
-
-
-def _load_icon_pixmap(size=24):
-    """Load the app icon as raw ARGB32 pixel data for D-Bus (IconPixmap).
-    Some tray hosts can't find icon themes via IconName alone, so we send
-    pixel data directly — works regardless of host icon theme setup."""
-    # Try loading from our bundled icon first
-    base = os.path.dirname(os.path.abspath(__file__))
-    candidates = [
-        os.path.join(base, '..', 'icons', 'clipboard.png'),
-        # Flatpak install path (128x128, matching the manifest)
-        '/app/share/icons/hicolor/128x128/apps/io.github.juandlr.sclipboard.png',
-    ]
-    pixbuf = None
-    for path in candidates:
-        if os.path.exists(path):
-            try:
-                pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_size(path, size, size)
-                break
-            except Exception:
-                continue
-    if pixbuf is None:
-        return GLib.Variant('a(iiay)', [])
-    pixels = pixbuf.get_pixels()
-    if not isinstance(pixels, bytes):
-        pixels = bytes(pixels)
-    return GLib.Variant('a(iiay)', [(pixbuf.get_width(), pixbuf.get_height(), pixels)])
+_ICON_NAME = 'edit-copy-symbolic'
 
 
 class _StatusNotifierItem:
@@ -50,7 +22,6 @@ class _StatusNotifierItem:
         self._connection = connection
         self._on_activate = on_activate
         self._on_context_menu = on_context_menu
-        self._icon_pixmap = _load_icon_pixmap()
 
         node_info = self._build_introspection()
         self._reg_ids = []
@@ -103,19 +74,15 @@ class _StatusNotifierItem:
                 invocation.return_value(GLib.Variant('(a{sv})', (val,)))
         elif interface_name == 'org.kde.StatusNotifierItem':
             if method_name == 'Activate':
-                x = parameters.get_child_value(0).get_int32()
-                y = parameters.get_child_value(1).get_int32()
-                print(f'[tray] Activate({x}, {y})', flush=True)
                 if self._on_activate:
                     self._on_activate()
                 invocation.return_value(GLib.Variant('()', ()))
             elif method_name == 'SecondaryActivate':
                 invocation.return_value(GLib.Variant('()', ()))
             elif method_name == 'ContextMenu':
-                x = parameters.get_child_value(0).get_int32()
-                y = parameters.get_child_value(1).get_int32()
-                print(f'[tray] ContextMenu({x}, {y})', flush=True)
                 if self._on_context_menu:
+                    x = parameters.get_child_value(0).get_int32()
+                    y = parameters.get_child_value(1).get_int32()
                     self._on_context_menu(x, y)
                 invocation.return_value(GLib.Variant('()', ()))
             elif method_name == 'Scroll':
@@ -138,7 +105,7 @@ class _StatusNotifierItem:
             'Category': GLib.Variant('s', 'ApplicationStatus'),
             'Status': GLib.Variant('s', 'Active'),
             'IconName': GLib.Variant('s', _ICON_NAME),
-            'IconPixmap': self._icon_pixmap,
+            'IconPixmap': GLib.Variant('a(iiay)', []),
             'Title': GLib.Variant('s', 'Clipboard Manager'),
             'ItemIsMenu': GLib.Variant('b', False),
             'WindowId': GLib.Variant('i', 0),
@@ -203,7 +170,6 @@ class _DbusMenu:
                 ids = [parameters.get_child_value(0).get_child_value(i).get_int32()
                        for i in range(parameters.get_child_value(0).n_children())]
                 result = self._get_group_properties(ids)
-                # Wrap in (a(ia{sv})) manually — result is already a GVariant
                 outer = GLib.VariantBuilder(GLib.VariantType.new('(a(ia{sv}))'))
                 outer.add_value(result)
                 invocation.return_value(outer.end())
@@ -230,25 +196,20 @@ class _DbusMenu:
         return False
 
     def _get_layout(self, parent_id):
-        """Build (u(ia{sv}av)) manually via GVariantBuilder."""
         outer = GLib.VariantBuilder(GLib.VariantType.new('(u(ia{sv}av))'))
-        outer.add_value(GLib.Variant('u', 0))  # revision
+        outer.add_value(GLib.Variant('u', 0))
         if parent_id != 0:
-            # Empty layout for non-root
             layout = GLib.VariantBuilder(GLib.VariantType.new('(ia{sv}av)'))
             layout.add_value(GLib.Variant('i', 0))
             layout.add_value(GLib.Variant('a{sv}', {}))
             layout.add_value(GLib.Variant('av', []))
             outer.add_value(layout.end())
             return outer.end()
-        # Build children as av (array of variants wrapping (ia{sv}av))
         children = GLib.VariantBuilder(GLib.VariantType.new('av'))
         for i, item_info in enumerate(self._menu_items):
             label, enabled, item_type = item_info[0], item_info[1], item_info[2]
-            # Build child (ia{sv}av)
             child = GLib.VariantBuilder(GLib.VariantType.new('(ia{sv}av)'))
             child.add_value(GLib.Variant('i', i + 1))
-            # Build a{sv} for child props
             child_props = GLib.VariantBuilder(GLib.VariantType.new('a{sv}'))
             for k, v in {
                 'label': GLib.Variant('s', label),
@@ -262,19 +223,16 @@ class _DbusMenu:
             }.items():
                 child_props.add_value(GLib.Variant('{sv}', (k, v)))
             child.add_value(child_props.end())
-            child.add_value(GLib.Variant('av', []))  # no grand-children
-            children.add_value(GLib.Variant('v', child.end()))  # wrap in variant for av
-        # Build root layout (ia{sv}av)
+            child.add_value(GLib.Variant('av', []))
+            children.add_value(GLib.Variant('v', child.end()))
         layout = GLib.VariantBuilder(GLib.VariantType.new('(ia{sv}av)'))
         layout.add_value(GLib.Variant('i', 0))
-        layout.add_value(GLib.Variant('a{sv}', {}))  # root has no props
+        layout.add_value(GLib.Variant('a{sv}', {}))
         layout.add_value(children.end())
         outer.add_value(layout.end())
         return outer.end()
 
     def _get_group_properties(self, ids):
-        """Build a(ia{sv}) manually with GVariantBuilder — avoids GLib.Variant
-        auto-conversion bugs with nested Variant values in Python containers."""
         builder = GLib.VariantBuilder(GLib.VariantType.new('a(ia{sv})'))
         for item_id in ids:
             if 1 <= item_id <= len(self._menu_items):
@@ -287,10 +245,8 @@ class _DbusMenu:
                 }
             else:
                 props = {}
-            # Build (ia{sv}) struct manually
             entry = GLib.VariantBuilder(GLib.VariantType.new('(ia{sv})'))
             entry.add_value(GLib.Variant('i', item_id))
-            # Build a{sv} dict
             dict_b = GLib.VariantBuilder(GLib.VariantType.new('a{sv}'))
             for k, v in props.items():
                 dict_b.add_value(GLib.Variant('{sv}', (k, v)))
@@ -333,19 +289,14 @@ class TrayIcon:
 
     def __init__(self, on_activate=None):
         self._connection = Gio.bus_get_sync(Gio.BusType.SESSION, None)
-
-        # Menu items: (label, enabled, item_type, callback)
         self._menu_items = [
             ('Toggle Clipboard', True, 'standard', None),
             ('', True, 'separator', None),
             ('Quit', True, 'standard', None),
         ]
-
-        # Keep strong references — objects must survive GC or bus registration drops
         self._sni = _StatusNotifierItem(self._connection, on_activate, self._on_context_menu)
         self._menu = _DbusMenu(self._connection, self._menu_items)
 
-        # Own the bus name (with handlers for debugging)
         def _name_acquired(conn, name):
             print(f'[tray] name acquired: {name}', flush=True)
         def _name_lost(conn, name):
@@ -355,16 +306,14 @@ class TrayIcon:
             Gio.BusNameOwnerFlags.NONE,
             _name_acquired, _name_lost,
         )
-
-        # Register with StatusNotifierWatcher so panel discovers us
         self._connection.call_sync(
             'org.kde.StatusNotifierWatcher', '/StatusNotifierWatcher',
             'org.kde.StatusNotifierWatcher', 'RegisterStatusNotifierItem',
             GLib.Variant('(s)', (_BUS_NAME,)),
-            None,  # void return type
+            None,
             Gio.DBusCallFlags.NONE, -1, None,
         )
-        print(f'[tray] registered', flush=True)
+        print('[tray] registered', flush=True)
 
     def _on_context_menu(self, x, y):
         pass
