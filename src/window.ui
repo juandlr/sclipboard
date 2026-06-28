@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <requires lib="gtk" version="4.0"/>
+  <requires lib="Adw" version="1.0"/>
+
+  <!-- Settings popover (referenced by the header bar's menu button) -->
+  <object class="GtkPopover" id="settings_popover">
+    <child>
+      <object class="GtkBox">
+        <property name="orientation">vertical</property>
+        <property name="spacing">12</property>
+        <property name="margin-start">12</property>
+        <property name="margin-end">12</property>
+        <property name="margin-top">12</property>
+        <property name="margin-bottom">12</property>
+        <child>
+          <object class="GtkLabel">
+            <property name="label">Max Items</property>
+            <property name="halign">start</property>
+          </object>
+        </child>
+        <child>
+          <object class="GtkSpinButton" id="max_items_spin">
+            <property name="adjustment">
+              <object class="GtkAdjustment">
+                <property name="lower">1</property>
+                <property name="upper">500</property>
+                <property name="step-increment">1</property>
+              </object>
+            </property>
+          </object>
+        </child>
+        <child>
+          <object class="GtkCheckButton" id="hide_copy_check">
+            <property name="label">Hide on copy</property>
+            <property name="halign">start</property>
+          </object>
+        </child>
+      </object>
+    </child>
+  </object>
+
+  <!-- Main window (template) -->
+  <template class="ClipboardWindow" parent="AdwApplicationWindow">
+    <property name="title">SClipboard</property>
+
+    <child>
+      <object class="AdwToolbarView">
+        <child type="top">
+          <object class="AdwHeaderBar">
+            <property name="decoration-layout">:close</property>
+            <property name="title-widget">
+              <object class="GtkBox"/>
+            </property>
+
+            <child type="start">
+              <object class="GtkLabel">
+                <property name="label">Clipboard</property>
+                <style>
+                  <class name="title"/>
+                </style>
+              </object>
+            </child>
+
+            <child type="start">
+              <object class="GtkSearchEntry" id="search_entry">
+                <property name="placeholder-text">Search…</property>
+                <property name="hexpand">True</property>
+              </object>
+            </child>
+
+            <child type="end">
+              <object class="GtkButton" id="clear_btn">
+                <property name="tooltip-text">Clear all</property>
+                <style>
+                  <class name="flat"/>
+                </style>
+                <child>
+                  <object class="GtkImage">
+                    <property name="icon-name">edit-delete-symbolic</property>
+                  </object>
+                </child>
+              </object>
+            </child>
+
+            <child type="end">
+              <object class="GtkMenuButton" id="menu_btn">
+                <property name="icon-name">open-menu-symbolic</property>
+                <property name="popover">settings_popover</property>
+              </object>
+            </child>
+          </object>
+        </child>
+
+        <property name="content">
+          <object class="GtkScrolledWindow" id="scrolled">
+            <property name="vexpand">True</property>
+            <child>
+              <object class="GtkListBox" id="listbox">
+                <property name="selection-mode">none</property>
+                <property name="valign">start</property>
+                <property name="margin-start">12</property>
+                <property name="margin-end">12</property>
+                <property name="margin-top">12</property>
+                <property name="margin-bottom">12</property>
+                <style>
+                  <class name="boxed-list"/>
+                </style>
+              </object>
+            </child>
+          </object>
+        </property>
+      </object>
+    </child>
+  </template>
+</interface>

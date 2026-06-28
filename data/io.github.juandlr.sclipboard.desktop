@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=SClipboard
+Comment=Clipboard history manager
+Exec=python3 /home/juan/Desktop/sclipboard/src/main.py
+Type=Application
+Icon=io.github.juandlr.sclipboard
+Categories=Utility;
+StartupNotify=false
+StartupWMClass=io.github.juandlr.sclipboard

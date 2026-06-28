@@ -1,0 +1,40 @@
+app-id: io.github.juandlr.sclipboard
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+command: sclipboard
+
+finish-args:
+  - --socket=x11
+  - --socket=session-bus
+  - --share=ipc
+  - --device=dri
+  - --env=GDK_BACKEND=x11
+
+modules:
+  - name: sclipboard
+    buildsystem: simple
+    build-commands:
+      # Install Python source files
+      - install -Dm755 src/main.py /app/share/sclipboard/src/main.py
+      - install -Dm755 src/tray.py /app/share/sclipboard/src/tray.py
+      - install -Dm755 src/watcher.py /app/share/sclipboard/src/watcher.py
+      - install -Dm755 src/window.py /app/share/sclipboard/src/window.py
+      - install -Dm644 src/clipboard_item.py /app/share/sclipboard/src/clipboard_item.py
+      - install -Dm644 src/clipboard_monitor.py /app/share/sclipboard/src/clipboard_monitor.py
+      - install -Dm644 src/__init__.py /app/share/sclipboard/src/__init__.py
+      - install -Dm644 src/window.ui /app/share/sclipboard/src/window.ui
+      # Install icons
+      - install -Dm644 icons/clipboard.png /app/share/icons/hicolor/128x128/apps/io.github.juandlr.sclipboard.png
+      # Launcher
+      - install -Dm755 sclipboard.sh /app/bin/sclipboard
+      # Desktop file (generated inline for Flatpak — different from local desktop file)
+      - mkdir -p /app/share/applications
+      - |
+        printf '[Desktop Entry]\nName=SClipboard\nComment=Clipboard history manager\nExec=sclipboard\nType=Application\nIcon=io.github.juandlr.sclipboard\nCategories=Utility;\nStartupNotify=false\nStartupWMClass=io.github.juandlr.sclipboard\n' > /app/share/applications/io.github.juandlr.sclipboard.desktop
+      # GSettings schema
+      - install -Dm644 data/io.github.juandlr.sclipboard.gschema.xml /app/share/glib-2.0/schemas/io.github.juandlr.sclipboard.gschema.xml
+      - glib-compile-schemas /app/share/glib-2.0/schemas/
+    sources:
+      - type: dir
+        path: .

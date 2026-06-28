@@ -1,0 +1,21 @@
+<schemalist>
+  <schema id="io.github.juandlr.sclipboard" path="/io/github/juandlr/sclipboard/">
+    <key name="max-items" type="i">
+      <default>50</default>
+      <summary>Maximum clipboard history items</summary>
+      <range min="1" max="500"/>
+    </key>
+    <key name="win-width" type="i">
+      <default>440</default>
+      <summary>Window width</summary>
+    </key>
+    <key name="win-height" type="i">
+      <default>450</default>
+      <summary>Window height</summary>
+    </key>
+    <key name="hide-after-copy" type="b">
+      <default>true</default>
+      <summary>Hide window after copying</summary>
+    </key>
+  </schema>
+</schemalist>

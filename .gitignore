@@ -1,0 +1,10 @@
+__pycache__/
+.venv/
+.idea/
+*.pyc
+*.pyo
+/tmp/
+.flatpak-builder/
+builddir/
+repo/
+*.flatpak
