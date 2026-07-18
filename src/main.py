@@ -2,26 +2,22 @@ import sys
 import os
 import gi
 import json
-import socket
-import threading
 import subprocess
 
 # Lock the API versions — must happen before any gi.repository imports
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 
-from gi.repository import Adw, Gio, GLib, Gtk
+from gi.repository import Adw, Gio, GLib
 
 # Let Python find our src/ package whether we run as 'python3 src/main.py' or 'python3 -m src.main'
 if __name__ == '__main__' and __package__ is None:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from src.window import ClipboardWindow
-    from src.clipboard_monitor import ClipboardMonitor
     from src.clipboard_item import ClipboardItem
     from src.tray import TrayIcon
 else:
     from .window import ClipboardWindow
-    from .clipboard_monitor import ClipboardMonitor
     from .clipboard_item import ClipboardItem
     from .tray import TrayIcon
 
@@ -32,7 +28,7 @@ _xdg_data = os.environ.get('XDG_DATA_HOME',
 _data_dir = os.path.join(_xdg_data, 'sclipboard')
 os.makedirs(_data_dir, exist_ok=True)
 HISTORY_FILE = os.path.join(_data_dir, 'history.json')
-SOCKET_PATH = '/tmp/sclipboard.sock'
+QUEUE_FILE = '/tmp/sclipboard-queue.json'
 
 
 class ClipboardApplication(Adw.Application):
@@ -48,21 +44,16 @@ class ClipboardApplication(Adw.Application):
         # GSettings — GNOME-native settings storage (auto-persists)
         self.settings = Gio.Settings.new('io.github.juandlr.sclipboard')
 
-        self._monitor = ClipboardMonitor()
-        self._monitor.prime_from_store(self._store)
-        # Connect monitor directly — handles clipboard when watcher is unavailable
-        self._monitor.connect('content-changed', self._on_monitor_item)
-        # GUI no longer listens to monitor directly —
-        # the X11 watcher process handles clipboard monitoring
         self._window = None
-        self._tray = None  # created on first activation
+        self._tray = None   # created on first activation
         self._watcher = None
+        self._last_item_seq = 0   # track watcher items we've already processed
 
-        # ── Socket listener for watcher IPC ──
-        self._running = True
-        self._listener_thread = threading.Thread(
-            target=self._socket_listen, daemon=True)
-        self._listener_thread.start()
+        # ── File-based IPC: watcher writes to queue file, we monitor it ──
+        self._setup_watcher_ipc()
+
+        # ── Watcher health check (restarts watcher if it dies) ──
+        GLib.timeout_add_seconds(10, self._check_watcher)
 
     def do_activate(self):
         # Create tray on first activation (only primary instance reaches here)
@@ -82,7 +73,7 @@ class ClipboardApplication(Adw.Application):
         self._create_window()
 
     def _create_window(self):
-        self._window = ClipboardWindow(app=self, store=self._store, monitor=self._monitor)
+        self._window = ClipboardWindow(app=self, store=self._store)
         self._window.set_hide_on_close(True)
         self._window.present()
 
@@ -97,36 +88,22 @@ class ClipboardApplication(Adw.Application):
         """Tray icon clicked → toggle window."""
         self.activate()  # GTK routes this to do_activate()
 
-    def _on_tray_context_menu(self, x, y):
-        """Right-click tray icon → show quit popup."""
-        menu = Gtk.Window(type=Gtk.WindowType.POPUP)
-        menu.set_resizable(False)
-        menu.set_decorated(False)
-
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        box.add_css_class('toolbar')
-        box.set_margin_top(4)
-        box.set_margin_bottom(4)
-
-        quit_btn = Gtk.Button(label='Quit')
-        quit_btn.connect('clicked', lambda b: self.quit())
-        box.append(quit_btn)
-
-        menu.set_child(box)
-        menu.present()
-        menu.set_position(Gtk.WindowPosition.MOUSE)
-
-    # ── X11 Watcher process ─────────────────────────────────────
+    # ── Watcher health check ─────────────────────────────────────
 
     def _start_watcher(self):
         """Launch the headless clipboard watcher with X11 backend.
         The watcher reads clipboard changes (unfocused-safe via X11)
-        and sends them through the Unix socket."""
+        and writes items to the queue file.
+        If it dies, it gets restarted automatically."""
+        # Check if existing watcher is still alive
+        if self._watcher is not None and self._watcher.poll() is None:
+            return  # still running
         if self._watcher is not None:
-            return  # already running
+            rc = self._watcher.returncode
+            print(f'[main] watcher died (rc={rc}), restarting', flush=True)
+
         env = os.environ.copy()
         env['GDK_BACKEND'] = 'x11'
-        # Resolve watcher path relative to main.py (works in Flatpak and local)
         base = os.path.dirname(os.path.abspath(__file__))
         watcher_path = os.path.join(base, 'watcher.py')
         try:
@@ -134,70 +111,55 @@ class ClipboardApplication(Adw.Application):
                 [sys.executable, watcher_path],
                 env=env,
                 cwd=base,
-                stdout=None,
-                stderr=None,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
-            print('[main] watcher started (pid=%d)' % self._watcher.pid, flush=True)
+            print(f'[main] watcher started (pid=%d)' % self._watcher.pid, flush=True)
         except Exception as e:
-            print('[main] failed to start watcher: %s' % e, flush=True)
+            print(f'[main] failed to start watcher: %s' % e, flush=True)
 
-    # ── Socket listener (runs in background thread) ─────────────
+    def _check_watcher(self):
+        """Periodic: restart watcher if it died."""
+        if self._watcher is not None and self._watcher.poll() is not None:
+            print('[main] watcher health check: dead, restarting', flush=True)
+            self._start_watcher()
+        return GLib.SOURCE_CONTINUE  # keep the timer alive
 
-    def _socket_listen(self):
-        """Thread: listen on Unix socket for watcher notifications."""
-        # Clean up stale socket file from previous run
+    # ── File-based watcher IPC ────────────────────────────────────
+
+    def _setup_watcher_ipc(self):
+        """Watch the queue file for new clipboard items from the watcher."""
+        queue = Gio.File.new_for_path(QUEUE_FILE)
+        self._file_monitor = queue.monitor_file(Gio.FileMonitorFlags.NONE, None)
+        self._file_monitor.connect('changed', self._on_queue_changed)
+
+    def _on_queue_changed(self, monitor, file, other_file, event_type):
+        """File monitor callback — watcher wrote a new item to the queue."""
+        if event_type not in (Gio.FileMonitorEvent.CHANGED,
+                              Gio.FileMonitorEvent.CREATED):
+            return
         try:
-            os.unlink(SOCKET_PATH)
-        except OSError:
-            pass
-
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.bind(SOCKET_PATH)
-        sock.listen(5)
-        sock.settimeout(1.0)  # wake up every second to check _running
-
-        print('[main] socket listening on %s' % SOCKET_PATH, flush=True)
-
-        while self._running:
-            try:
-                conn, _ = sock.accept()
-                data = conn.recv(4096)
-                conn.close()
-                if data:
-                    item_dict = json.loads(data)
-                    # Must use idle_add — GTK is not thread-safe
-                    GLib.idle_add(self._on_watcher_item, item_dict)
-            except socket.timeout:
-                continue
-            except Exception:
-                continue
-
-        sock.close()
-        try:
-            os.unlink(SOCKET_PATH)
-        except OSError:
-            pass
-
-    def _on_monitor_item(self, monitor, item):
-        """Called when ClipboardMonitor detects a clipboard change."""
-        self._process_item(item)
-
-    def _on_watcher_item(self, item_dict: dict):
-        """Called from main thread (via idle_add) when watcher sends an item."""
+            with open(QUEUE_FILE) as f:
+                item_dict = json.load(f)
+        except Exception:
+            return
+        seq = item_dict.get('seq', -1)
+        if seq <= self._last_item_seq:
+            return  # already processed this one
+        self._last_item_seq = seq
         item = ClipboardItem(
             content=item_dict.get('content', ''),
             content_type=item_dict.get('content_type', 'text'),
             timestamp=item_dict.get('timestamp', 0),
             thumbnail=item_dict.get('thumbnail', ''),
         )
-        self._process_item(item)
+        GLib.idle_add(self._process_item, item)
         return False  # don't repeat
 
     # ── Cleanup ─────────────────────────────────────────────────
 
     def do_shutdown(self):
-        """Kill watcher process and clean up socket on exit."""
-        self._running = False
+        """Kill watcher process on exit."""
         if self._watcher is not None:
             try:
                 self._watcher.terminate()

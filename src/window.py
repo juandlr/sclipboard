@@ -12,6 +12,16 @@ gi.require_version('Adw', '1')
 from gi.repository import Gtk, Adw, Gdk, Gio, GLib
 
 _UI_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'window.ui')
+_LOG_FILE = '/tmp/sclipboard-watcher.log'  # shared with watcher for easy debugging
+
+
+def _gwlog(msg: str):
+    """Append a message to the shared log file."""
+    try:
+        with open(_LOG_FILE, 'a') as f:
+            f.write(f'[gui] {msg}\n')
+    except Exception:
+        pass
 
 
 @Gtk.Template(filename=_UI_FILE)
@@ -26,7 +36,7 @@ class ClipboardWindow(Adw.ApplicationWindow):
     clear_btn = Gtk.Template.Child()
     hide_copy_check = Gtk.Template.Child()
 
-    def __init__(self, app: Adw.Application, store: Gio.ListStore, monitor):
+    def __init__(self, app: Adw.Application, store: Gio.ListStore):
         super().__init__(application=app)
 
         self._app = app
@@ -165,17 +175,30 @@ class ClipboardWindow(Adw.ApplicationWindow):
             child = widget.get_child()
             item = getattr(child, '_item', None)
         if item is None:
+            _gwlog('_do_copy: item is None, widget=%s' % type(widget).__name__)
             return
+
         if item.content_type == 'text':
             self._clipboard.set(item.content)
+            _gwlog('copied text (%d chars)' % len(item.content))
         else:
-            try:
-                texture = Gdk.Texture.new_from_filename(item.thumbnail)
-                if texture:
-                    self._clipboard.set_texture(texture)
-            except Exception:
-                pass
-        # Hide window if preference is enabled
+            filepath = item.thumbnail
+            if not filepath or not os.path.exists(filepath):
+                _gwlog('_do_copy: thumbnail file missing: %s' % filepath)
+            else:
+                try:
+                    texture = Gdk.Texture.new_from_filename(filepath)
+                    if texture is None:
+                        _gwlog('_do_copy: new_from_filename returned None for %s' % filepath)
+                    else:
+                        png_bytes = texture.save_to_png_bytes()
+                        provider = Gdk.ContentProvider.new_for_bytes('image/png', png_bytes)
+                        self._clipboard.set_content(provider)
+                        _gwlog('copied image from %s' % filepath)
+                except Exception as e:
+                    _gwlog('_do_copy: error loading image: %s' % e)
+
+        # Hide window if preference is enabled (always runs, even on failure)
         if self._app.settings.get_boolean('hide-after-copy'):
             self.set_visible(False)
 
