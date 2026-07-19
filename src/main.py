@@ -143,6 +143,12 @@ class ClipboardApplication(Adw.Application):
                 item_dict = json.load(f)
         except Exception:
             return
+
+        # Clipboard was cleared externally (e.g. 1Password timer)
+        if item_dict.get('cleared'):
+            self._remove_latest()
+            return
+
         seq = item_dict.get('seq', -1)
         if seq <= self._last_item_seq:
             return  # already processed this one
@@ -155,6 +161,13 @@ class ClipboardApplication(Adw.Application):
         )
         GLib.idle_add(self._process_item, item)
         return False  # don't repeat
+
+    def _remove_latest(self):
+        """Remove the most recent item (e.g. clipboard was cleared by 1Password)."""
+        if self._store.get_n_items() > 0:
+            self._store.remove(0)
+            self.save_history()
+            print('[main] removed latest item (clipboard cleared)', flush=True)
 
     # ── Cleanup ─────────────────────────────────────────────────
 
@@ -210,6 +223,7 @@ class ClipboardApplication(Adw.Application):
             })
         with open(HISTORY_FILE, 'w') as f:
             json.dump(data, f, indent=2)
+        os.chmod(HISTORY_FILE, 0o600)
 
     def _load_history(self):
         if not os.path.exists(HISTORY_FILE):

@@ -100,9 +100,10 @@ class ClipboardWindow(Adw.ApplicationWindow):
         row._item = item
 
         raw = item.content or ''
-        title = GLib.markup_escape_text(raw)
         if len(raw) > 60:
             title = GLib.markup_escape_text(raw[:60]) + '…'
+        else:
+            title = GLib.markup_escape_text(raw)
         row.set_title(title)
 
         now = int(time.time())

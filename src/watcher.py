@@ -14,6 +14,8 @@ import sys
 import time
 import json
 import traceback
+import tempfile
+import hashlib
 import gi
 
 gi.require_version('Gtk', '4.0')
@@ -46,6 +48,7 @@ def _send_to_gui(item_dict: dict):
         tmp = QUEUE_FILE + '.tmp'
         with open(tmp, 'w') as f:
             json.dump(item_dict, f)
+        os.chmod(tmp, 0o600)
         os.replace(tmp, QUEUE_FILE)  # atomic rename — GUI never sees half-written data
     except Exception as e:
         _log(f'queue write failed: {e}')
@@ -63,6 +66,7 @@ class WatcherApp(Gtk.Application):
         self._last_texture_hash = ''       # dedup images on copy-back
         self._seq = 0                      # sequence number to cancel stale reads
         self._item_seq = 0                 # monotonic counter, one per item sent to GUI
+        self._pending = {}                 # seq -> track text/texture callbacks for clear detection
 
     def do_startup(self):
         """Called once when the app starts. Set up clipboard monitoring."""
@@ -87,6 +91,11 @@ class WatcherApp(Gtk.Application):
         """Clipboard changed — read text and images asynchronously."""
         self._seq += 1
         seq = self._seq
+        # Clean up any stale pending entries from aborted reads
+        for old_seq in list(self._pending.keys()):
+            if old_seq < seq:
+                del self._pending[old_seq]
+        self._pending[seq] = {'text': False, 'image': False, 'waiting': 2}
         _log(f'changed (seq={seq})')
         try:
             clipboard.read_text_async(None, self._on_text_ready, seq)
@@ -105,6 +114,7 @@ class WatcherApp(Gtk.Application):
             text = clipboard.read_text_finish(result)
         except Exception as e:
             _log(f'read_text_finish error: {e}')
+            self._check_pending(seq, 'text', True)
             return
         if text and text.strip() and text != self._last_text:
             self._last_text = text
@@ -118,6 +128,8 @@ class WatcherApp(Gtk.Application):
             }
             _log(f'text ready ({len(text)} chars)')
             _send_to_gui(item)
+        empty = (text is not None and not text.strip())
+        self._check_pending(seq, 'text', empty)
 
     def _on_texture_ready(self, clipboard, result, seq):
         """Async texture callback — save to temp file, notify GUI."""
@@ -127,15 +139,12 @@ class WatcherApp(Gtk.Application):
             texture = clipboard.read_texture_finish(result)
         except Exception as e:
             _log(f'read_texture_finish error: {e}')
-            return
+            texture = None
         if texture is None:
+            self._check_pending(seq, 'image', True)
             return
 
         try:
-            # Save texture to a stable temp path
-            import tempfile
-            import hashlib
-
             tmp = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
             texture.save_to_png(tmp.name)
             tmp.close()
@@ -144,13 +153,15 @@ class WatcherApp(Gtk.Application):
                 file_hash = hashlib.md5(f.read()).hexdigest()[:12]
 
             if file_hash == self._last_texture_hash:
-                os.unlink(tmp.name)  # duplicate from copy-back, skip
+                os.unlink(tmp.name)
+                self._check_pending(seq, 'image', False)
                 return
             self._last_texture_hash = file_hash
 
             filepath = os.path.join(tempfile.gettempdir(),
                                     f'clipimage_{file_hash}.png')
             os.replace(tmp.name, filepath)
+            os.chmod(filepath, 0o600)
 
             self._item_seq += 1
             item = {
@@ -162,8 +173,23 @@ class WatcherApp(Gtk.Application):
             }
             _log(f'image ready ({filepath})')
             _send_to_gui(item)
+            self._check_pending(seq, 'image', False)
         except Exception as e:
             _log(f'texture save error: {e}\n{traceback.format_exc()}')
+            self._check_pending(seq, 'image', False)
+
+    def _check_pending(self, seq, kind, empty):
+        """Track callback completions. When both done and both empty → clipboard cleared."""
+        if seq not in self._pending:
+            return
+        self._pending[seq][kind] = empty
+        self._pending[seq]['waiting'] -= 1
+        if self._pending[seq]['waiting'] == 0:
+            if self._pending[seq]['text'] and self._pending[seq]['image']:
+                _log(f'clipboard cleared (seq={seq})')
+                _send_to_gui({'cleared': True, 'seq': self._item_seq + 1})
+                self._item_seq += 1
+            del self._pending[seq]
 
     def do_shutdown(self):
         """Clean up on exit."""
