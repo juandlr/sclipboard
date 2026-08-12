@@ -78,6 +78,8 @@ class _StatusNotifierItem:
                     self._on_activate()
                 invocation.return_value(GLib.Variant('()', ()))
             elif method_name == 'SecondaryActivate':
+                if self._on_activate:
+                    self._on_activate()
                 invocation.return_value(GLib.Variant('()', ()))
             elif method_name == 'ContextMenu':
                 if self._on_context_menu:
@@ -316,7 +318,8 @@ class TrayIcon:
         print('[tray] registered', flush=True)
 
     def _on_context_menu(self, x, y):
-        pass
+        if self._on_activate:
+            self._on_activate()
 
     def set_open_callback(self, callback):
         self._menu_items[0] = ('Toggle Clipboard', True, 'standard', callback)

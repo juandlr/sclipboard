@@ -22,10 +22,11 @@ gi.require_version('Gtk', '4.0')
 gi.require_version('Gdk', '4.0')
 from gi.repository import Gtk, Gdk, GLib
 
-QUEUE_FILE = '/tmp/sclipboard-queue.json'
-
-# Log file for debugging watcher issues
-LOG_FILE = '/tmp/sclipboard-watcher.log'
+_runtime_dir = os.environ.get('XDG_RUNTIME_DIR', '/tmp')
+_queue_dir = os.path.join(_runtime_dir, 'sclipboard')
+os.makedirs(_queue_dir, mode=0o700, exist_ok=True)
+QUEUE_FILE = os.path.join(_queue_dir, 'queue.json')
+LOG_FILE = os.path.join(_queue_dir, 'watcher.log')
 
 _START_TIME = time.time()
 
@@ -36,6 +37,7 @@ def _log(msg: str):
     try:
         with open(LOG_FILE, 'a') as f:
             f.write(f'[+{elapsed:.1f}s] {msg}\n')
+        os.chmod(LOG_FILE, 0o600)
     except Exception:
         pass
 
@@ -145,7 +147,8 @@ class WatcherApp(Gtk.Application):
             return
 
         try:
-            tmp = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+            tmp = tempfile.NamedTemporaryFile(suffix='.png', delete=False,
+                                                dir=_queue_dir)
             texture.save_to_png(tmp.name)
             tmp.close()
 
@@ -158,7 +161,7 @@ class WatcherApp(Gtk.Application):
                 return
             self._last_texture_hash = file_hash
 
-            filepath = os.path.join(tempfile.gettempdir(),
+            filepath = os.path.join(_queue_dir,
                                     f'clipimage_{file_hash}.png')
             os.replace(tmp.name, filepath)
             os.chmod(filepath, 0o600)

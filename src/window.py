@@ -12,7 +12,8 @@ gi.require_version('Adw', '1')
 from gi.repository import Gtk, Adw, Gdk, Gio, GLib
 
 _UI_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'window.ui')
-_LOG_FILE = '/tmp/sclipboard-watcher.log'  # shared with watcher for easy debugging
+_runtime_dir = os.environ.get('XDG_RUNTIME_DIR', '/tmp')
+_LOG_FILE = os.path.join(_runtime_dir, 'sclipboard', 'watcher.log')
 
 
 def _gwlog(msg: str):
@@ -20,6 +21,7 @@ def _gwlog(msg: str):
     try:
         with open(_LOG_FILE, 'a') as f:
             f.write(f'[gui] {msg}\n')
+        os.chmod(_LOG_FILE, 0o600)
     except Exception:
         pass
 

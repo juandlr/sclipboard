@@ -28,7 +28,10 @@ _xdg_data = os.environ.get('XDG_DATA_HOME',
 _data_dir = os.path.join(_xdg_data, 'sclipboard')
 os.makedirs(_data_dir, exist_ok=True)
 HISTORY_FILE = os.path.join(_data_dir, 'history.json')
-QUEUE_FILE = '/tmp/sclipboard-queue.json'
+_runtime_dir = os.environ.get('XDG_RUNTIME_DIR', '/tmp')
+_queue_dir = os.path.join(_runtime_dir, 'sclipboard')
+os.makedirs(_queue_dir, mode=0o700, exist_ok=True)
+QUEUE_FILE = os.path.join(_queue_dir, 'queue.json')
 
 
 class ClipboardApplication(Adw.Application):
