@@ -34,9 +34,10 @@ _START_TIME = time.time()
 def _log(msg: str):
     """Append a timestamped message to the watcher log."""
     elapsed = time.time() - _START_TIME
+    wall = time.strftime('%Y-%m-%d %H:%M:%S')
     try:
         with open(LOG_FILE, 'a') as f:
-            f.write(f'[+{elapsed:.1f}s] {msg}\n')
+            f.write(f'{wall} [+{elapsed:.1f}s] {msg}\n')
         os.chmod(LOG_FILE, 0o600)
     except Exception:
         pass

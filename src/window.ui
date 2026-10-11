@@ -55,7 +55,7 @@
 
             <child type="start">
               <object class="GtkLabel">
-                <property name="label">Clipboard</property>
+                <property name="label">SClipboard</property>
                 <style>
                   <class name="title"/>
                 </style>

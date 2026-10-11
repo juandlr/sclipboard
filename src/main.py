@@ -1,5 +1,6 @@
 import sys
 import os
+import time
 import gi
 import json
 import subprocess
@@ -58,14 +59,16 @@ class ClipboardApplication(Adw.Application):
         # ── Watcher health check (restarts watcher if it dies) ──
         GLib.timeout_add_seconds(10, self._check_watcher)
 
-    def do_activate(self):
-        # Create tray on first activation (only primary instance reaches here)
-        if self._tray is None:
-            self._tray = TrayIcon(on_activate=self._on_tray_activate)
-            self._tray.set_open_callback(self._on_tray_activate)
-            self._tray.set_quit_callback(self.quit)
-        # Start the X11 watcher process
+    def do_startup(self):
+        """Create tray and start the watcher before any window exists —
+        a background/autostart launch must track the clipboard immediately."""
+        Adw.Application.do_startup(self)
+        self._tray = TrayIcon(on_activate=self._on_tray_activate)
+        self._tray.set_open_callback(self._on_tray_activate)
+        self._tray.set_quit_callback(self.quit)
         self._start_watcher()
+
+    def do_activate(self):
         if self._window is not None:
             if self._window.is_active():
                 self._window.set_visible(False)
@@ -117,13 +120,19 @@ class ClipboardApplication(Adw.Application):
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+            # Fresh process restarts its item counter at 0 — reset ours to
+            # match, or every new item looks like an already-seen one.
+            self._last_item_seq = 0
             print(f'[main] watcher started (pid=%d)' % self._watcher.pid, flush=True)
         except Exception as e:
             print(f'[main] failed to start watcher: %s' % e, flush=True)
 
     def _check_watcher(self):
-        """Periodic: restart watcher if it died."""
-        if self._watcher is not None and self._watcher.poll() is not None:
+        """Periodic: start the watcher if missing, restart it if it died."""
+        if self._watcher is None:
+            print('[main] watcher health check: not running, starting', flush=True)
+            self._start_watcher()
+        elif self._watcher.poll() is not None:
             print('[main] watcher health check: dead, restarting', flush=True)
             self._start_watcher()
         return GLib.SOURCE_CONTINUE  # keep the timer alive
@@ -147,9 +156,14 @@ class ClipboardApplication(Adw.Application):
         except Exception:
             return
 
-        # Clipboard was cleared externally (e.g. 1Password timer)
+        # Clipboard was cleared externally (e.g. 1Password timer). Only
+        # honor it for recent items — lock screens also clear the clipboard
+        # (on suspend), which must not delete history.
         if item_dict.get('cleared'):
-            self._remove_latest()
+            if self._store.get_n_items() > 0:
+                newest = self._store.get_item(0)
+                if time.time() - newest.timestamp < 100:
+                    self._remove_latest()
             return
 
         seq = item_dict.get('seq', -1)

@@ -4,7 +4,4 @@ __pycache__/
 *.pyc
 *.pyo
 /tmp/
-.flatpak-builder/
-builddir/
-repo/
-*.flatpak
+/.claude/

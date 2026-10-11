@@ -18,9 +18,10 @@ _LOG_FILE = os.path.join(_runtime_dir, 'sclipboard', 'watcher.log')
 
 def _gwlog(msg: str):
     """Append a message to the shared log file."""
+    wall = time.strftime('%Y-%m-%d %H:%M:%S')
     try:
         with open(_LOG_FILE, 'a') as f:
-            f.write(f'[gui] {msg}\n')
+            f.write(f'{wall} [gui] {msg}\n')
         os.chmod(_LOG_FILE, 0o600)
     except Exception:
         pass
